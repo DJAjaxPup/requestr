@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { socket } from './lib/socket';
 import JoinRoom from './components/JoinRoom.jsx';
 import RequestForm from './components/RequestForm.jsx';
@@ -8,24 +8,23 @@ import Toast from './components/Toast.jsx';
 import Header from './components/Header.jsx';
 import QRJoin from './components/QRJoin.jsx';
 
-
 export default function App(){
   const [phase, setPhase] = useState('join');
   const [room, setRoom] = useState(null);
   const [queue, setQueue] = useState([]);
   const [msg, setMsg] = useState('');
 
-useEffect(()=>{
-  const params = new URLSearchParams(window.location.search);
-  const code = params.get('room');
-  if(code && code.length === 4){
-    socket.emit('join', { code: code.toUpperCase(), user: '' });
-  }
-},[]);
+  // Auto-join via ?room=CODE
   useEffect(()=>{
-    const onState = (payload)=>{ setRoom(payload); setQueue(payload.queue || []); 
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('room');
+    if(code && code.length === 4){
+      socket.emit('join', { code: code.toUpperCase(), user: '' });
+    }
+  },[]);
 
-setPhase('room'); };
+  useEffect(()=>{
+    const onState = (payload)=>{ setRoom(payload); setQueue(payload.queue || []); setPhase('room'); };
     const onAdd = (entry)=> setQueue(q=>[...q, entry]);
     const onUpd = (entry)=> setQueue(q=> q.map(x=> x.id===entry.id? entry : x));
     const onDel = ({id})=> setQueue(q=> q.filter(x=> x.id!==id));
@@ -52,32 +51,28 @@ setPhase('room'); };
     };
   },[]);
 
-  const join = ({ code, user }) => {
-    socket.emit('join', { code, user });
-  };
-
+  const join = ({ code, user }) => socket.emit('join', { code, user });
   const add = (req) => socket.emit('add_request', req);
   const upvote = (id) => socket.emit('upvote', { id });
-  const act = ({ pin, action, payload }) => socket.emit('dj_action', { pin, action, payload });
 
   if(phase==='join') return <JoinRoom onJoin={join} />;
-
-  const role = 'audience'; // simple for now; DJ controls available to anyone with PIN
 
   return (
     <div className="container">
       <Header room={room?.code} tipsUrl={room?.tipsUrl} />
+
       <div className="row" style={{alignItems:'flex-start'}}>
         <div style={{flex:3, display:'grid', gap:12}}>
           <RequestForm onSubmit={add} />
-          <RequestList role={role} items={queue} onUpvote={upvote} />
+          <RequestList role="audience" items={queue} onUpvote={upvote} />
         </div>
-        <div style={{flex:2}}>
-          <DJControls queue={queue} onAction={act} pinHint={room?.pinHint} roomMeta={room} />
-		<QRJoin roomCode={room?.code} />
 
+        <div style={{flex:2, display:'grid', gap:12}}>
+          <DJControls queue={queue} roomMeta={room} />
+          <QRJoin roomCode={room?.code} />
         </div>
       </div>
+
       <Toast msg={msg} />
     </div>
   );
