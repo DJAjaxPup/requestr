@@ -1,3 +1,4 @@
+// server/server.js
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -23,18 +24,18 @@ const io = new Server(server, { cors: { origin: true, methods: ['GET', 'POST'] }
 const PORT = process.env.PORT || 4000;
 
 /**
- * In-memory store
- * rooms = Map(code -> {
+ * Room shape (in-memory):
+ * {
  *   code, pin, name, tipsUrl, createdAt,
- *   requests: Map(id -> { id, song, artist, note, user, votes, status, createdAt }),
- *   order: [id, ...]
- * })
+ *   requests: Map<id, { id, song, artist, note, user, votes, status, createdAt, voters:Set<string> }>,
+ *   order: string[]
+ * }
  */
 const rooms = new Map();
 
-// Rate limiters
-const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops/10s per IP
-const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops/10s per user
+// Rate limiting
+const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops / 10s per IP
+const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops / 10s per user
 
 function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }) {
   let code = codeOverride
@@ -44,7 +45,7 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }
 
   const room = {
     code,
-    pin: String(pin || Math.floor(1000 + Math.random() * 9000)), // **DJ PIN** (secret)
+    pin: String(pin || Math.floor(1000 + Math.random() * 9000)), // DJ PIN (private)
     name,
     tipsUrl,
     createdAt: Date.now(),
@@ -55,15 +56,16 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }
   return room;
 }
 
-// Boot room (no more "Test Room"); force pretty code if provided
+// Boot room (fixed code for easy QR)
 const defaultRoom = createRoom({
   name: process.env.ROOM_NAME || 'CityFest — The Loft',
-  pin: process.env.ROOM_PIN || 2468,         // <- DJ PIN (keep private)
+  pin: process.env.ROOM_PIN || 2468,         // DJ PIN you enter in DJ panel
   tipsUrl: process.env.TIPS_URL || '',
-  code: process.env.ROOM_CODE || 'AJAX'      // <- 4-char public room code for QR/join
+  code: process.env.ROOM_CODE || 'AJAX'      // public 4-char join code
 });
 console.log(`[server] Room ${defaultRoom.name} => code=${defaultRoom.code}, DJ PIN=${defaultRoom.pin}`);
 
+// REST helpers
 app.get('/api/rooms/:code', (req, res) => {
   const room = rooms.get(req.params.code);
   if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -72,6 +74,7 @@ app.get('/api/rooms/:code', (req, res) => {
 
 app.get('/health', (_req, res) => res.type('text').send('ok'));
 
+// Socket guard
 io.use(async (socket, next) => {
   try {
     await limiterByIP.consume(socket.handshake.address || 'unknown');
@@ -81,28 +84,34 @@ io.use(async (socket, next) => {
   }
 });
 
-io.on('connection', (socket) => {
-  socket.data = { roomCode: null, user: 'Guest', isDJ: false };
+// Helper: strip non-serializable/internal fields before emitting
+function publicEntry(entry) {
+  const { voters, ...rest } = entry || {};
+  return rest;
+}
 
-  // Join room (audience or DJ both join the same room channel)
+io.on('connection', (socket) => {
+  socket.data = { roomCode: null, user: 'Guest', isDJ: false, uid: socket.id };
+
+  // Audience/DJ join room
   socket.on('join', ({ code, user }) => {
     const room = rooms.get(code);
     if (!room) return socket.emit('error_msg', 'Room not found');
     socket.join(code);
     socket.data.roomCode = code;
     if (user) socket.data.user = String(user).slice(0, 24);
-    socket.emit('state', serializeRoom(room, /*forDJ*/ false));
+    socket.emit('state', serializeRoom(room, false));
   });
 
-  // DJ authentication — separate from audience
+  // DJ auth (separate PIN)
   socket.on('dj_auth', ({ code, pin }) => {
     const room = rooms.get(code || socket.data.roomCode);
     if (!room) return socket.emit('dj_auth_err', 'Room not found');
     if (String(pin) !== String(room.pin)) return socket.emit('dj_auth_err', 'Invalid PIN');
     socket.data.isDJ = true;
     socket.data.roomCode = room.code;
-    socket.join(room.code); // ensure joined
-    socket.emit('dj_auth_ok', { room: serializeRoom(room, /*forDJ*/ true) });
+    socket.join(room.code);
+    socket.emit('dj_auth_ok', { room: serializeRoom(room, true) });
   });
 
   socket.on('dj_logout', () => {
@@ -110,12 +119,11 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Audience: add request
+  // Add request
   socket.on('add_request', async (req) => {
     try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
-
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
@@ -125,25 +133,35 @@ io.on('connection', (socket) => {
       user: (req?.user || socket.data.user || 'Guest').slice(0, 24),
       votes: 1,
       status: 'queued',
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      voters: new Set([socket.data.uid]) // first vote belongs to requester
     };
     room.requests.set(id, entry);
     room.order.push(id);
-    io.to(room.code).emit('request_added', entry);
+    io.to(room.code).emit('request_added', publicEntry(entry));
   });
 
-  // Audience: upvote
+  // Upvote (ONE vote per user per song)
   socket.on('upvote', async ({ id }) => {
     try { await limiterByUser.consume(`${socket.data.user}:${id}`); } catch { return; }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
     const entry = room.requests.get(id);
     if (!entry) return;
+
+    const voterKey = socket.data.uid; // could be replaced by a persistent user ID later
+    if (entry.voters?.has(voterKey)) {
+      socket.emit('error_msg', 'You’ve already voted for this song.');
+      return;
+    }
+
+    if (!entry.voters) entry.voters = new Set();
+    entry.voters.add(voterKey);
     entry.votes += 1;
-    io.to(room.code).emit('request_updated', entry);
+    io.to(room.code).emit('request_updated', publicEntry(entry));
   });
 
-  // DJ-only actions (now session-based; no PIN in payload)
+  // DJ-only actions
   socket.on('dj_action', ({ action, payload }) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
@@ -154,14 +172,14 @@ io.on('connection', (socket) => {
       const entry = room.requests.get(id);
       if (!entry) return;
       entry.status = status; // 'queued' | 'playing' | 'done'
-      io.to(room.code).emit('request_updated', entry);
+      io.to(room.code).emit('request_updated', publicEntry(entry));
     }
 
     if (action === 'reorder') {
       const { order } = payload || {};
       if (!Array.isArray(order)) return;
       const existing = new Set(room.order);
-      room.order = order.filter((id) => existing.has(id));
+      room.order = order.filter((x) => existing.has(x));
       io.to(room.code).emit('order_updated', room.order);
     }
 
@@ -188,9 +206,8 @@ function serializeRoom(room, forDJ = false) {
     code: room.code,
     name: room.name,
     tipsUrl: room.tipsUrl,
-    // No pinHint to audience anymore; only DJ sees meta after auth
-    pinHint: forDJ ? `${String(room.pin)[0]}***` : undefined,
-    queue: room.order.map((id) => room.requests.get(id))
+    pinHint: forDJ ? `${String(room.pin)[0]}***` : undefined, // only reveal hint to DJ
+    queue: room.order.map((id) => publicEntry(room.requests.get(id)))
   };
 }
 
@@ -210,8 +227,7 @@ try {
   console.log('[server] Dist not found yet at', clientDist, e.message);
 }
 
-// Never cache index.html so updates show up immediately
-app.get('*', (req, res) => {
+app.get('*', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(clientDist, 'index.html'));
 });
