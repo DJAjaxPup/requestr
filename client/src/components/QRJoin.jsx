@@ -7,11 +7,7 @@ export default function QRJoin({ roomCode }){
 
   useEffect(() => {
     if (!roomCode) return;
-    // const url = `${window.location.origin}/?room=${encodeURIComponent(roomCode)}`;
-const host = window.location.hostname === 'localhost'
-  ? 'YOUR.IP.ADDR:5173'   // <-- put your IPv4 here, keep :5173
-  : window.location.host;
-const url = `${window.location.protocol}//${host}/?room=${encodeURIComponent(roomCode)}`;
+    const url = `${window.location.origin}/?room=${encodeURIComponent(roomCode)}`;
 
     setLink(url);
     QRCode.toCanvas(canvasRef.current, url, { width: 220, margin: 1 }, (err) => {
