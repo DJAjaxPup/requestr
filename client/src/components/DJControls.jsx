@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { socket } from '../lib/socket';
 
 export default function DJControls({ queue = [], roomMeta }) {
@@ -6,9 +6,15 @@ export default function DJControls({ queue = [], roomMeta }) {
   const [pin, setPin] = useState('');
   const [msg, setMsg] = useState('');
 
+  // settings fields
+  const [name, setName] = useState(roomMeta?.name || '');
+  const [tipsUrl, setTipsUrl] = useState(roomMeta?.tipsUrl || '');
+
   useEffect(() => {
     const onOK = ({ room }) => {
       setAuthed(true);
+      if (room?.name) setName(room.name);
+      if (room?.tipsUrl) setTipsUrl(room.tipsUrl);
       setMsg('DJ unlocked');
       setTimeout(() => setMsg(''), 1500);
     };
@@ -25,6 +31,12 @@ export default function DJControls({ queue = [], roomMeta }) {
     };
   }, []);
 
+  useEffect(() => {
+    // keep local fields in sync if server pushes updates
+    if (roomMeta?.name != null) setName(roomMeta.name);
+    if (roomMeta?.tipsUrl != null) setTipsUrl(roomMeta.tipsUrl);
+  }, [roomMeta?.name, roomMeta?.tipsUrl]);
+
   const auth = () => {
     if (!roomMeta?.code) return setMsg('Join a room first');
     socket.emit('dj_auth', { code: roomMeta.code, pin });
@@ -35,6 +47,12 @@ export default function DJControls({ queue = [], roomMeta }) {
 
   const remove = (id) =>
     socket.emit('dj_action', { action: 'delete', payload: { id } });
+
+  const saveMeta = () => {
+    socket.emit('dj_action', { action: 'room_meta', payload: { name, tipsUrl } });
+    setMsg('Saved event settings');
+    setTimeout(() => setMsg(''), 1500);
+  };
 
   const top = queue?.[0];
 
@@ -68,6 +86,29 @@ export default function DJControls({ queue = [], roomMeta }) {
         Room {roomMeta?.name || roomMeta?.code}
       </div>
 
+      {/* Event Settings */}
+      <div className="card" style={{ background: '#0e1525', marginBottom: 12 }}>
+        <h3 style={{ marginBottom: 8 }}>Event Settings</h3>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <input
+            className="input"
+            placeholder="Event name (shown to audience)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className="input"
+            placeholder="Tip Jar URL (https://…)"
+            value={tipsUrl}
+            onChange={(e) => setTipsUrl(e.target.value)}
+          />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="button" onClick={saveMeta}>Save</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Now Playing */}
       {top ? (
         <div className="item status-playing" style={{ marginBottom: 8 }}>
           <div>
@@ -82,6 +123,7 @@ export default function DJControls({ queue = [], roomMeta }) {
         <div className="small" style={{ marginBottom: 8 }}>No items queued yet.</div>
       )}
 
+      {/* Queue */}
       <div className="list" style={{ maxHeight: 320, overflow: 'auto' }}>
         {queue.slice(1).map((r) => (
           <div className="item" key={r.id}>
@@ -97,6 +139,8 @@ export default function DJControls({ queue = [], roomMeta }) {
           </div>
         ))}
       </div>
+
+      {msg ? <div className="small" style={{ marginTop: 8 }}>{msg}</div> : null}
     </div>
   );
 }
