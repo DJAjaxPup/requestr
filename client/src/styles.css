@@ -7,30 +7,35 @@
   --accent:#ff2e93;     /* Hot pink */
   --accent-ink:#2a0a18;
   --accent-2:#00d3c2;   /* Teal accent */
+  --border:#1e2740;     /* <-- used by cards/inputs */
 }
 
-*{ box-sizing:border-box }
-html,body,#root{ height:100% }
-body{
+* { box-sizing:border-box }
+html,body,#root { height:100% }
+body {
   margin:0;
-  font-family:Inter,system-ui,Arial;
+  font-family:Inter, system-ui, Arial, sans-serif;
   background:var(--bg);
   color:var(--fg);
 }
 
 /* Layout / Containers */
-.container{ max-width:980px; margin:0 auto; padding:24px }
-.card{
+.container { max-width:980px; margin:0 auto; padding:24px }
+.card {
   background:var(--card);
   border:1px solid var(--border);
   border-radius:16px;
   padding:16px;
-  box-shadow:0 6px 24px rgba(0,0,0,.25)
+  box-shadow:0 6px 24px rgba(0,0,0,.25);
 }
-.row{ display:flex; gap:12px; align-items:center }
+.row { display:flex; gap:12px; align-items:center }
+
+/* Headings */
+h1,h2,h3 { margin:0 0 8px 0 }
+h3 { font-size:18px }
 
 /* Buttons / Inputs */
-.button{
+.button {
   background:var(--accent);
   color:var(--accent-ink);
   border:none;
@@ -41,10 +46,10 @@ body{
   transition: transform .06s ease, box-shadow .15s ease, opacity .2s ease;
   box-shadow:0 8px 22px rgba(255,46,147,.15);
 }
-.button:hover{ transform: translateY(-1px) }
-.button:active{ transform: translateY(0) scale(.98) }
+.button:hover { transform: translateY(-1px) }
+.button:active { transform: translateY(0) scale(.98) }
 
-.input, .pin{
+.input, .pin {
   background:#0f1626;
   color:var(--fg);
   border:1px solid var(--border);
@@ -54,18 +59,18 @@ body{
 }
 
 /* Badges / Chips */
-.badge{
+.badge {
   font-size:12px;
   padding:2px 8px;
   border-radius:999px;
   background:rgba(0,211,194,.12);
   color:#7ef1e7;
-  border:1px solid rgba(0,211,194,.3)
+  border:1px solid rgba(0,211,194,.3);
 }
 
 /* Lists / Items */
-.list{ display:grid; gap:10px }
-.item{
+.list { display:grid; gap:10px }
+.item {
   display:grid;
   grid-template-columns: 1fr auto;
   gap:10px;
@@ -74,45 +79,67 @@ body{
   background:#0e1525;
   border:1px solid var(--border);
 }
-.meta{ color:var(--muted); font-size:12px }
+.meta { color:var(--muted); font-size:12px }
 
 /* Status tints */
-.status-playing{ border-color:#1f6f5f; background:rgba(0,211,194,.08) }
-.status-done{ opacity:.65 }
+.status-playing { border-color:#1f6f5f; background:rgba(0,211,194,.08) }
+.status-done { opacity:.65 }
 
 /* Toast */
-.toast{
+.toast {
   position:fixed; right:16px; bottom:16px;
   background:#0e1520; border:1px solid var(--border);
   box-shadow:0 6px 24px rgba(0,0,0,.4);
-  padding:12px 16px; border-radius:12px
+  padding:12px 16px; border-radius:12px;
 }
 
 /* Header */
-.header{
+.header {
   display:flex; align-items:center; justify-content:space-between;
-  gap:12px; margin-bottom:16px
+  gap:12px; margin-bottom:16px;
 }
-.logo{ font-weight:900; letter-spacing:.6px; text-transform:uppercase }
+.logo { font-weight:900; letter-spacing:.6px; text-transform:uppercase }
 
-/* New: brand logo helper (drop /cityfest-logo.png in client/public) */
-.brand-logo{
+/* Brand logo helper (uses /CF.png in client/public) */
+.brand-logo {
   height:28px; width:auto; vertical-align:middle;
   filter: drop-shadow(0 2px 8px rgba(255,46,147,.25));
   margin-right:8px;
 }
 
 /* Links / KBD / Small */
-.link{ color:var(--accent); text-decoration: none }
-.small{ font-size:12px; color:var(--muted) }
-.kbd{
+.link { color:var(--accent); text-decoration:none }
+.small { font-size:12px; color:var(--muted) }
+.kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   font-size:12px; padding:2px 6px; border:1px solid #2a3648;
   border-bottom-width:2px; border-radius:6px;
-  background:rgba(0,211,194,.08); color:#aeeeee
+  background:rgba(0,211,194,.08); color:#aeeeee;
 }
 
 /* Dividers */
-hr{ border:none; border-top:1px solid var(--border); margin:16px 0 }
+hr { border:none; border-top:1px solid var(--border); margin:16px 0 }
 
+/* ==== Mobile polish ==== */
+@media (max-width: 680px) {
+  .container { padding:16px; max-width:100% }
+  .header { flex-direction:column; align-items:flex-start; gap:6px }
+  .row { flex-direction:column; align-items:stretch }      /* stack left/right columns */
+  .card { padding:14px; border-radius:14px }
+  .logo { font-size:18px }
+  .small { font-size:12px }
 
+  .brand-logo { height:36px }                               /* bigger logo on phones */
+  .input, .pin { font-size:16px; padding:12px }             /* bigger fields */
+  .button { font-size:16px; padding:12px 16px; width:100% } /* thumb-friendly */
+
+  .item { grid-template-columns:1fr; gap:8px; padding:12px } /* cleaner list items */
+
+  /* QR card: let the canvas scale to width */
+  .qr-wrap canvas { width:100% !important; height:auto !important }
+}
+
+/* iPhone safe areas */
+@supports (padding: max(0px)) {
+  body { padding-bottom: max(0px, env(safe-area-inset-bottom)) }
+}
