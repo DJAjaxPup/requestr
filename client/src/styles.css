@@ -1,13 +1,12 @@
 /* ===== CityFest Theme (Pink + Teal) ===== */
 :root {
-  --bg:#0b0f14;          /* page background (dark) */
-  --card:#101726;        /* card background */
-  --muted:#9aa3b2;       /* subtle text */
-  --fg:#f5f7ff;          /* primary text */
-  --accent:#ff2e93;      /* CityFest Pink */
-  --accent-ink:#2a0a18;  /* text on pink */
-  --accent-2:#00d3c2;    /* Teal accent */
-  --border:#1e2740;      /* card border */
+  --bg:#0b0f14;
+  --card:#101726;
+  --muted:#9aa3b2;
+  --fg:#f5f7ff;
+  --accent:#ff2e93;     /* Hot pink */
+  --accent-ink:#2a0a18;
+  --accent-2:#00d3c2;   /* Teal accent */
 }
 
 *{ box-sizing:border-box }
