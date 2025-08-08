@@ -98,7 +98,7 @@ body{
 
 /* Brand logo */
 .brand-logo{
-  height:50px; 
+  height:100px; 
   width:auto;
   vertical-align:middle;
   filter: drop-shadow(0 2px 8px rgba(255,46,147,.25));
