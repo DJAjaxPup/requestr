@@ -1,4 +1,8 @@
+// server/server.js
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -6,9 +10,6 @@ import helmet from 'helmet';
 import cors from 'cors';
 import { customAlphabet } from 'nanoid';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
 
 const nanoid = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 4);
 
@@ -28,11 +29,9 @@ const PORT = process.env.PORT || 4000;
  * In-memory store (swap for SQLite if you want persistence across restarts)
  * rooms = {
  *   ROOM: {
- *     code: 'ABCD', pin: '1234', name: 'Pawchella Day 3', tipsUrl: '',
+ *     code: 'ABCD', pin: '1234', name: 'CityFest — The Loft', tipsUrl: '',
  *     createdAt: Date,
- *     requests: {
- *       id: { id, song, artist, note, user, votes, status: 'queued'|'playing'|'done', createdAt }
- *     },
+ *     requests: Map(id -> { id, song, artist, note, user, votes, status, createdAt }),
  *     order: [id, ...]
  *   }
  * }
@@ -40,11 +39,17 @@ const PORT = process.env.PORT || 4000;
 const rooms = new Map();
 
 // Rate limiters
-const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops per 10s
-const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops per 10s
+const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops per 10s per IP
+const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops per 10s per user
 
-function createRoom({ name = 'New Room', pin, tipsUrl = '' }) {
-  const code = nanoid();
+function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }) {
+  // Optional: deterministic 4-char room code via env (e.g., AJAX)
+  let code = codeOverride
+    ? String(codeOverride).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
+    : nanoid();
+
+  if (!code || code.length !== 4) code = nanoid();
+
   const room = {
     code,
     pin: String(pin || Math.floor(1000 + Math.random() * 9000)),
@@ -58,8 +63,13 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '' }) {
   return room;
 }
 
-// Create a quick room on boot for testing
-const defaultRoom = createRoom({ name: 'Test Room', pin: 2468, tipsUrl: '' });
+// ---- Boot a room for the event (no more "Test Room") ----
+const defaultRoom = createRoom({
+  name: process.env.ROOM_NAME || 'CityFest — The Loft',
+  pin: process.env.ROOM_PIN || 2468,
+  tipsUrl: process.env.TIPS_URL || '',
+  code: process.env.ROOM_CODE // Optional: set to 'AJAX' to force ?room=AJAX
+});
 console.log(`[server] Room ${defaultRoom.name} => code=${defaultRoom.code}, DJ PIN=${defaultRoom.pin}`);
 
 // REST helper (optional)
@@ -69,9 +79,13 @@ app.get('/api/rooms/:code', (req, res) => {
   res.json({ code: room.code, name: room.name, tipsUrl: room.tipsUrl });
 });
 
+// Simple health check
+app.get('/health', (_req, res) => res.type('text').send('ok'));
+
+// Socket rate-limit by IP
 io.use(async (socket, next) => {
   try {
-    await limiterByIP.consume(socket.handshake.address);
+    await limiterByIP.consume(socket.handshake.address || 'unknown');
     next();
   } catch {
     next(new Error('Rate limit exceeded'));
@@ -88,8 +102,7 @@ io.on('connection', (socket) => {
     socket.data.user = user?.slice(0, 24) || 'Guest';
 
     // Send initial state
-    const payload = serializeRoom(room);
-    socket.emit('state', payload);
+    socket.emit('state', serializeRoom(room));
   });
 
   // Audience: add request
@@ -98,6 +111,7 @@ io.on('connection', (socket) => {
 
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
+
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
@@ -130,7 +144,7 @@ io.on('connection', (socket) => {
     return String(pin) === String(room.pin);
   }
 
-  // DJ: set status / reorder / delete
+  // DJ: set status / reorder / delete / room meta
   socket.on('dj_action', ({ pin, action, payload }) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
@@ -146,7 +160,6 @@ io.on('connection', (socket) => {
 
     if (action === 'reorder') {
       const { order } = payload; // array of ids
-      // keep only known ids, preserve uniqueness
       const existing = new Set(room.order);
       const newOrder = order.filter((id) => existing.has(id));
       room.order = newOrder;
@@ -180,17 +193,33 @@ function serializeRoom(room) {
     queue: room.order.map((id) => room.requests.get(id))
   };
 }
+
 // ---- serve built client (same-origin) ----
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const clientDist = path.join(__dirname, '../client/dist');
-app.use(express.static(clientDist));
+app.use(express.static(clientDist, {
+  // hashed assets can be cached; index.html will be no-store below
+  maxAge: '1y',
+  etag: true,
+  lastModified: true,
+}));
 
-// Let the client handle routes (after API/socket paths)
+// Log what we’re serving (helps confirm new builds on Render)
+try {
+  const assetsDir = path.join(clientDist, 'assets');
+  const files = fs.existsSync(assetsDir) ? fs.readdirSync(assetsDir).slice(0, 10) : [];
+  console.log('[server] Serving client from:', clientDist);
+  console.log('[server] Dist assets sample:', files);
+} catch (e) {
+  console.log('[server] Dist not found yet at', clientDist, e.message);
+}
+
+// SPA fallback — never cache index.html so new builds show up immediately
 app.get('*', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(clientDist, 'index.html'));
 });
-
 
 server.listen(PORT, () => console.log(`[server] Listening on :${PORT}`));
