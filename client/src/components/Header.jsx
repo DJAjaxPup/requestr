@@ -12,12 +12,24 @@ export default function Header({ room, tipsUrl }) {
           <span>CityFest Requests</span>
         </div>
         <div className="small">
-          Room <span className="kbd">{room}</span> • The Loft, San Diego • Aug 10, 2025
+          Room <span className="kbd">{room || '—'}</span> • The Loft, San Diego • Aug 10, 2025
         </div>
       </div>
-      {tipsUrl
-        ? <a className="link" href={tipsUrl} target="_blank" rel="noreferrer">Tip Jar</a>
-        : <span className="small">Tip Jar unavailable</span>}
+
+      {tipsUrl ? (
+        <a
+          href={tipsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="button"
+          style={{ textDecoration: 'none' }}
+          aria-label="Tip Jar"
+        >
+          💸 Tip Jar
+        </a>
+      ) : (
+        <span className="small">Tip Jar unavailable</span>
+      )}
     </div>
   );
 }
