@@ -1,42 +1,98 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { socket } from '../lib/socket';
 
-export default function DJControls({ queue, onAction, pinHint, roomMeta }){
+export default function DJControls({ queue = [], roomMeta }) {
+  const [authed, setAuthed] = useState(false);
   const [pin, setPin] = useState('');
-  const [name, setName] = useState(roomMeta?.name || '');
-  const [tipsUrl, setTipsUrl] = useState(roomMeta?.tipsUrl || '');
+  const [msg, setMsg] = useState('');
 
-  const act = (action, payload) => onAction({ pin, action, payload });
+  useEffect(() => {
+    const onOK = ({ room }) => {
+      setAuthed(true);
+      setMsg('DJ unlocked');
+      setTimeout(() => setMsg(''), 1500);
+    };
+    const onErr = (m) => {
+      setAuthed(false);
+      setMsg(typeof m === 'string' ? m : 'Invalid PIN');
+      setTimeout(() => setMsg(''), 2000);
+    };
+    socket.on('dj_auth_ok', onOK);
+    socket.on('dj_auth_err', onErr);
+    return () => {
+      socket.off('dj_auth_ok', onOK);
+      socket.off('dj_auth_err', onErr);
+    };
+  }, []);
 
-  const setStatus = (id, status) => act('set_status', { id, status });
-  const remove = (id) => act('delete', { id });
-  const saveRoom = () => act('room_meta', { name, tipsUrl });
+  const auth = () => {
+    if (!roomMeta?.code) return setMsg('Join a room first');
+    socket.emit('dj_auth', { code: roomMeta.code, pin });
+  };
+
+  const setStatus = (id, status) =>
+    socket.emit('dj_action', { action: 'set_status', payload: { id, status } });
+
+  const remove = (id) =>
+    socket.emit('dj_action', { action: 'delete', payload: { id } });
+
+  const top = queue?.[0];
+
+  if (!authed) {
+    return (
+      <div className="card">
+        <h3>DJ Panel</h3>
+        <div className="small" style={{ marginBottom: 8 }}>
+          Enter DJ PIN to unlock controls.
+        </div>
+        <input
+          className="pin"
+          type="password"
+          placeholder="DJ PIN"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          inputMode="numeric"
+        />
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="button" onClick={auth}>Unlock</button>
+        </div>
+        {msg ? <div className="small" style={{ marginTop: 8 }}>{msg}</div> : null}
+      </div>
+    );
+  }
 
   return (
     <div className="card">
-      <h3>DJ Dashboard</h3>
-      <div className="row">
-        <input className="pin" placeholder={`PIN (starts with ${pinHint})`} value={pin} onChange={e=>setPin(e.target.value.slice(0,4))}/>
-        <span className="badge">Protect this PIN</span>
+      <h3>DJ Panel</h3>
+      <div className="small" style={{ marginBottom: 8 }}>
+        Room {roomMeta?.name || roomMeta?.code}
       </div>
-      <div className="row" style={{marginTop:8}}>
-        <input className="input" placeholder="Room name" value={name} onChange={e=>setName(e.target.value)} />
-        <input className="input" placeholder="Tip URL (optional)" value={tipsUrl} onChange={e=>setTipsUrl(e.target.value)} />
-        <button className="button" onClick={saveRoom}>Save</button>
-      </div>
-      <hr />
-      <div className="list">
-        {queue.map(req => (
-          <div key={req.id} className={`item status-${req.status}`}>
+
+      {top ? (
+        <div className="item status-playing" style={{ marginBottom: 8 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>{top.song} — {top.artist}</div>
+            <div className="meta">By {top.user} • {top.votes} votes</div>
+          </div>
+          <div className="row">
+            <button className="button" onClick={() => setStatus(top.id, 'done')}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <div className="small" style={{ marginBottom: 8 }}>No items queued yet.</div>
+      )}
+
+      <div className="list" style={{ maxHeight: 320, overflow: 'auto' }}>
+        {queue.slice(1).map((r) => (
+          <div className="item" key={r.id}>
             <div>
-              <div style={{fontWeight:700}}>{req.song} {req.artist ? `— ${req.artist}` : ''}</div>
-              {req.note && <div className="meta">“{req.note}”</div>}
-              <div className="meta">by {req.user} • votes {req.votes} • {req.status}</div>
+              <div style={{ fontWeight: 600 }}>{r.song} — {r.artist}</div>
+              <div className="meta">By {r.user} • {r.votes} votes • {r.status}</div>
             </div>
             <div className="row">
-              <button className="button" onClick={()=>setStatus(req.id, 'queued')}>Queue</button>
-              <button className="button" onClick={()=>setStatus(req.id, 'playing')}>Playing</button>
-              <button className="button" onClick={()=>setStatus(req.id, 'done')}>Done</button>
-              <button className="button" onClick={()=>remove(req.id)}>Delete</button>
+              <button className="button" onClick={() => setStatus(r.id, 'playing')}>Play</button>
+              <button className="button" onClick={() => setStatus(r.id, 'done')}>Done</button>
+              <button className="button" onClick={() => remove(r.id)}>Delete</button>
             </div>
           </div>
         ))}
