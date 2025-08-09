@@ -150,7 +150,10 @@ export default function App(){
 
   return (
     <div className="container">
-      <Header room={room?.code} tipsUrl={room?.tipsUrl} />
+      // ...
+<Header room={room?.code} tipsUrl={room?.tipsUrl} nowPlaying={room?.nowPlaying} />
+// ...
+
 
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div style={{ flex: 3, display: 'grid', gap: 12 }}>
