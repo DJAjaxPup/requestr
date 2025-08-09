@@ -26,7 +26,7 @@ const PORT = process.env.PORT || 4000;
 /**
  * Room shape (in-memory):
  * {
- *   code, pin, name, tipsUrl, createdAt,
+ *   code, pin, name, tipsUrl, nowPlaying, createdAt,
  *   requests: Map<id, { id, song, artist, note, user, votes, status, createdAt, voters:Set<string> }>,
  *   order: string[]
  * }
@@ -34,10 +34,10 @@ const PORT = process.env.PORT || 4000;
 const rooms = new Map();
 
 // Rate limiting
-const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops / 10s per IP
-const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops / 10s per user
+const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 });
+const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 });
 
-function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }) {
+function createRoom({ name = 'New Room', pin, tipsUrl = '', nowPlaying = '', code: codeOverride }) {
   let code = codeOverride
     ? String(codeOverride).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
     : nanoid();
@@ -45,9 +45,10 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }
 
   const room = {
     code,
-    pin: String(pin || Math.floor(1000 + Math.random() * 9000)), // DJ PIN (private)
+    pin: String(pin || Math.floor(1000 + Math.random() * 9000)),
     name,
     tipsUrl,
+    nowPlaying,
     createdAt: Date.now(),
     requests: new Map(),
     order: []
@@ -59,22 +60,21 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }
 // Boot room (fixed code for easy QR / deep link)
 const defaultRoom = createRoom({
   name: process.env.ROOM_NAME || 'CityFest — The Loft',
-  pin: process.env.ROOM_PIN || 2468,         // DJ PIN you enter in DJ panel
+  pin: process.env.ROOM_PIN || 2468,
   tipsUrl: process.env.TIPS_URL || '',
-  code: process.env.ROOM_CODE || 'AJAX'      // public 4-char join code
+  nowPlaying: '',
+  code: process.env.ROOM_CODE || 'AJAX'
 });
 console.log(`[server] Room ${defaultRoom.name} => code=${defaultRoom.code}, DJ PIN=${defaultRoom.pin}`);
 
-// Basic REST helpers (optional)
 app.get('/api/rooms/:code', (req, res) => {
   const room = rooms.get(req.params.code);
   if (!room) return res.status(404).json({ error: 'Room not found' });
-  res.json({ code: room.code, name: room.name, tipsUrl: room.tipsUrl });
+  res.json({ code: room.code, name: room.name, tipsUrl: room.tipsUrl, nowPlaying: room.nowPlaying });
 });
 
 app.get('/health', (_req, res) => res.type('text').send('ok'));
 
-// Socket guard
 io.use(async (socket, next) => {
   try {
     await limiterByIP.consume(socket.handshake.address || 'unknown');
@@ -84,17 +84,14 @@ io.use(async (socket, next) => {
   }
 });
 
-// Helper: strip internal fields before emitting
 function publicEntry(entry) {
   const { voters, ...rest } = entry || {};
   return rest;
 }
 
 io.on('connection', (socket) => {
-  // Session-ish info for this socket
   socket.data = { roomCode: null, user: 'Guest', isDJ: false, uid: socket.id };
 
-  // Audience/DJ join room
   socket.on('join', ({ code, user }) => {
     const room = rooms.get(code);
     if (!room) return socket.emit('error_msg', 'Room not found');
@@ -104,7 +101,6 @@ io.on('connection', (socket) => {
     socket.emit('state', serializeRoom(room, false));
   });
 
-  // DJ auth (separate from audience)
   socket.on('dj_auth', ({ code, pin }) => {
     const room = rooms.get(code || socket.data.roomCode);
     if (!room) return socket.emit('dj_auth_err', 'Room not found');
@@ -120,13 +116,21 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Add request  (supports ACK callback)
+  // Add request (supports ACK; also accepts {code} fallback)
   socket.on('add_request', async (req, cb) => {
     console.log('[add_request]', socket.data.roomCode, 'from', socket.id, req);
     try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
-    const room = rooms.get(socket.data.roomCode);
-    if (!room) return;
 
+    const codeFromPayload = (req?.code && typeof req.code === 'string') ? req.code.toUpperCase() : null;
+    const code = socket.data.roomCode || codeFromPayload;
+    if (!code || !rooms.has(code)) { try { cb?.({ ok: false, error: 'Not in a room' }); } catch {} ; return; }
+
+    if (socket.data.roomCode !== code) {
+      socket.join(code);
+      socket.data.roomCode = code;
+    }
+
+    const room = rooms.get(code);
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
@@ -137,7 +141,7 @@ io.on('connection', (socket) => {
       votes: 1,
       status: 'queued',
       createdAt: Date.now(),
-      voters: new Set([socket.data.uid]) // requester gets first vote
+      voters: new Set([socket.data.uid])
     };
     room.requests.set(id, entry);
     room.order.push(id);
@@ -146,27 +150,22 @@ io.on('connection', (socket) => {
     try { cb?.({ ok: true, id }); } catch {}
   });
 
-  // Upvote (ONE vote per user per song)
+  // Upvote
   socket.on('upvote', async ({ id }) => {
     try { await limiterByUser.consume(`${socket.data.user}:${id}`); } catch { return; }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
     const entry = room.requests.get(id);
     if (!entry) return;
-
-    const voterKey = socket.data.uid; // could be replaced by persistent user ID later
-    if (entry.voters?.has(voterKey)) {
-      socket.emit('error_msg', 'You’ve already voted for this song.');
-      return;
-    }
-
+    const voterKey = socket.data.uid;
+    if (entry.voters?.has(voterKey)) return socket.emit('error_msg', 'You’ve already voted for this song.');
     if (!entry.voters) entry.voters = new Set();
     entry.voters.add(voterKey);
     entry.votes += 1;
     io.to(room.code).emit('request_updated', publicEntry(entry));
   });
 
-  // DJ-only actions
+  // DJ-only actions (includes nowPlaying)
   socket.on('dj_action', ({ action, payload }) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
@@ -195,11 +194,17 @@ io.on('connection', (socket) => {
       io.to(room.code).emit('request_deleted', { id });
     }
 
+    // Update room metadata (now supports nowPlaying)
     if (action === 'room_meta') {
-      const { name, tipsUrl } = payload || {};
+      const { name, tipsUrl, nowPlaying } = payload || {};
       if (typeof name === 'string') room.name = name.slice(0, 64);
       if (typeof tipsUrl === 'string') room.tipsUrl = tipsUrl.slice(0, 256);
-      io.to(room.code).emit('room_updated', { name: room.name, tipsUrl: room.tipsUrl });
+      if (typeof nowPlaying === 'string') room.nowPlaying = nowPlaying.slice(0, 120);
+      io.to(room.code).emit('room_updated', {
+        name: room.name,
+        tipsUrl: room.tipsUrl,
+        nowPlaying: room.nowPlaying
+      });
     }
   });
 
@@ -211,7 +216,8 @@ function serializeRoom(room, forDJ = false) {
     code: room.code,
     name: room.name,
     tipsUrl: room.tipsUrl,
-    pinHint: forDJ ? `${String(room.pin)[0]}***` : undefined, // only reveal hint to DJ
+    nowPlaying: room.nowPlaying,
+    pinHint: forDJ ? `${String(room.pin)[0]}***` : undefined,
     queue: room.order.map((id) => publicEntry(room.requests.get(id)))
   };
 }
