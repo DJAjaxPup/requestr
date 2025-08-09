@@ -154,3 +154,16 @@ hr{ border:none; border-top:1px solid var(--border); margin:16px 0 }
   font-size:14px;
   box-shadow:0 6px 24px rgba(0,0,0,.15);
 }
+/* Avatar */
+.avatar{
+  width:48px; height:48px; border-radius:50%;
+  object-fit: cover; object-position: center;
+  border: 2px solid rgba(255,46,147,.5);
+  box-shadow: 0 6px 18px rgba(0,0,0,.35);
+}
+
+/* Make avatar a touch larger on big screens */
+@media (min-width: 900px){
+  .avatar{ width:56px; height:56px; }
+}
+
