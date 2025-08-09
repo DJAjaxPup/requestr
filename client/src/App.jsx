@@ -54,21 +54,40 @@ export default function App(){
   useEffect(() => {
     const onState = (payload) => {
       setRoom(payload);
-      setQueue(payload.queue || []);
+      // drop any done items that might be in the initial payload
+      const fresh = (payload.queue || []).filter(e => e && e.status !== 'done');
+      setQueue(fresh);
       setPhase('room');
       setConnecting(false);
     };
-    const onAdd  = (entry) => setQueue(q => [...q, entry]);
-   const onUpd  = (entry) => {
-  setQueue(q => {
-    if (entry.status === 'done') {
-      return q.filter(x => x.id !== entry.id);
-    }
-    return q.map(x => x.id === entry.id ? entry : x);
-  });
-};
+
+    const onAdd  = (entry) => {
+      if (!entry || entry.status === 'done') return; // never show done
+      setQueue(q => [...q, entry]);
+    };
+
+    const onUpd  = (entry) => {
+      setQueue(q => {
+        if (!entry) return q;
+        if (entry.status === 'done') return q.filter(x => x.id !== entry.id);
+        return q.map(x => x.id === entry.id ? entry : x);
+      });
+    };
+
     const onDel  = ({id}) => setQueue(q => q.filter(x => x.id !== id));
-    const onOrd  = (order) => setQueue(q => order.map(id => q.find(x => x.id === id)).filter(Boolean));
+
+    const onOrd  = (order) => {
+      // rebuild list in server order, but skip items that are done
+      setQueue(q => {
+        const byId = new Map(q.map(x => [x.id, x]));
+        const next = order
+          .map(id => byId.get(id))
+          .filter(Boolean)
+          .filter(x => x.status !== 'done');
+        return next;
+      });
+    };
+
     const onRUpd = (meta) => setRoom(r => ({ ...r, ...meta }));
     const onErr  = (m) => showMsg(m);
 
@@ -81,7 +100,6 @@ export default function App(){
     socket.on('error_msg', onErr);
 
     const onConnect = () => {
-      // rejoin on reconnect
       if (joinInfo.current?.code) socket.emit('join', joinInfo.current);
       setConnecting(true);
     };
@@ -111,21 +129,20 @@ export default function App(){
     };
   }, []);
 
-  // Submit handler with server ACK
- const add = (req, done) => {
-  const code = room?.code; // include the room code for server fallback
-  socket.emit('add_request', { ...req, code }, (resp) => {
-    const ok = !!(resp && resp.ok);
-    done?.(ok);
-    if (!ok) showMsg(resp?.error || 'Could not add request');
-  });
-};
+  // Submit handler with server ACK (includes room code fallback)
+  const add = (req, done) => {
+    const code = room?.code;
+    socket.emit('add_request', { ...req, code }, (resp) => {
+      const ok = !!(resp && resp.ok);
+      done?.(ok);
+      if (!ok) showMsg(resp?.error || 'Could not add request');
+    });
+  };
+
   const join = ({ code, user }) => doJoin({ code, user });
   const upvote = (id) => socket.emit('upvote', { id });
 
   if (phase === 'join') {
-    // If you still use a JoinRoom component, render it here.
-    // We’re auto-joining, so this path is rarely hit.
     return <div className="container"><QRJoin roomCode={DEFAULT_ROOM} /></div>;
   }
 
@@ -155,3 +172,4 @@ export default function App(){
     </div>
   );
 }
+
