@@ -143,3 +143,14 @@ hr{ border:none; border-top:1px solid var(--border); margin:16px 0 }
 @supports (padding: max(0px)){
   body{ padding-bottom: max(0px, env(safe-area-inset-bottom)); }
 }
+.now-playing{
+  margin-top:12px;
+  width:100%;
+  background: linear-gradient(90deg, rgba(255,46,147,.15), rgba(0,211,194,.1));
+  border:1px solid rgba(255,46,147,.35);
+  color:#f5f7ff;
+  padding:10px 12px;
+  border-radius:12px;
+  font-size:14px;
+  box-shadow:0 6px 24px rgba(0,0,0,.15);
+}
