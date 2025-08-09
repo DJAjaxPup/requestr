@@ -1,65 +1,42 @@
-import { useEffect, useState } from 'react';
-import { socket } from '../lib/socket';
+import { useState } from 'react';
 
-export default function RequestForm() {
+export default function RequestForm({ onSubmit }) {
   const [song, setSong] = useState('');
   const [artist, setArtist] = useState('');
   const [note, setNote] = useState('');
   const [name, setName] = useState('');
   const [msg, setMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  // show “Request logged!” after server ack or echo back
-  useEffect(() => {
-    const onErr = (m) => {
-      setMsg(typeof m === 'string' ? m : 'Something went wrong');
-      setTimeout(() => setMsg(''), 2500);
-    };
-    socket.on('error_msg', onErr);
-    return () => socket.off('error_msg', onErr);
-  }, []);
-
-  const showOk = () => {
-    setMsg('Request logged!');
-    setTimeout(() => setMsg(''), 2500);
+  const showMsg = (m, ms = 2500) => {
+    setMsg(m);
+    if (ms) setTimeout(() => setMsg(''), ms);
   };
 
   const clear = () => {
-    setSong('');
-    setArtist('');
-    setNote('');
+    setSong(''); setArtist(''); setNote('');
   };
 
   const submit = (e) => {
     e.preventDefault();
     const s = song.trim();
-    if (!s) {
-      setMsg('Please enter a song.');
-      setTimeout(() => setMsg(''), 2000);
-      return;
-    }
+    if (!s) return showMsg('Please enter a song.', 2000);
+    if (!onSubmit) return;
 
-    // IMPORTANT: server expects "add_request"
-    socket.emit(
-      'add_request',
+    setSubmitting(true);
+    onSubmit(
       {
         song: s,
         artist: artist.trim(),
         note: note.trim(),
         user: name.trim()
       },
-      // ack (server will call this if available)
-      (resp) => {
-        if (resp && resp.ok) {
-          clear();
-          showOk();
-        }
+      (ok) => {
+        setSubmitting(false);
+        if (ok) { clear(); showMsg('Request logged!'); }
+        else { showMsg('Could not add request'); }
       }
     );
-
-    // Fallback UX: show success quickly even if ack is delayed
-    setTimeout(() => {
-      if (!msg) { clear(); showOk(); }
-    }, 400);
   };
 
   return (
@@ -94,8 +71,8 @@ export default function RequestForm() {
       </div>
 
       <div className="row" style={{ justifyContent:'flex-end', marginTop:10 }}>
-        <button className="button" type="submit" disabled={!song.trim()}>
-          Submit
+        <button className="button" type="submit" disabled={!song.trim() || submitting}>
+          {submitting ? 'Sending…' : 'Submit'}
         </button>
       </div>
 
