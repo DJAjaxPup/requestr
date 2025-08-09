@@ -27,7 +27,7 @@ const PORT = process.env.PORT || 4000;
  * Room shape (in-memory):
  * {
  *   code, pin, name, tipsUrl, nowPlaying, createdAt,
- *   requests: Map<id, { id, song, artist, note, user, votes, status, createdAt, voters:Set<string> }>,
+ *   requests: Map<id, { id, song, artist, note, user, votes, status, createdAt, voters:Set<string>, key:string }>,
  *   order: string[]
  * }
  */
@@ -37,6 +37,29 @@ const rooms = new Map();
 const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 });
 const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 });
 
+// ---------- helpers ----------
+const norm = (s = '') => s
+  .toLowerCase()
+  .normalize('NFKD')
+  .replace(/[\u0300-\u036f]/g, '')       // strip accents
+  .replace(/[^a-z0-9\s]/g, ' ')          // drop punctuation
+  .replace(/\s+/g, ' ')                  // collapse spaces
+  .trim();
+
+const makeKey = (artist, song) => `${norm(artist)}|${norm(song)}`;
+
+function publicEntry(entry) {
+  const { voters, ...rest } = entry || {};
+  return rest;
+}
+
+function labelFor(entry) {
+  const song = (entry?.song || '').trim();
+  const artist = (entry?.artist || '').trim();
+  return (artist && song) ? `${artist} — ${song}` : (song || artist || '');
+}
+
+// ---------- room boot ----------
 function createRoom({ name = 'New Room', pin, tipsUrl = '', nowPlaying = '', code: codeOverride }) {
   let code = codeOverride
     ? String(codeOverride).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
@@ -57,7 +80,6 @@ function createRoom({ name = 'New Room', pin, tipsUrl = '', nowPlaying = '', cod
   return room;
 }
 
-// Boot room (fixed code for easy QR / deep link)
 const defaultRoom = createRoom({
   name: process.env.ROOM_NAME || 'CityFest — The Loft',
   pin: process.env.ROOM_PIN || 2468,
@@ -67,6 +89,7 @@ const defaultRoom = createRoom({
 });
 console.log(`[server] Room ${defaultRoom.name} => code=${defaultRoom.code}, DJ PIN=${defaultRoom.pin}`);
 
+// ---------- REST ----------
 app.get('/api/rooms/:code', (req, res) => {
   const room = rooms.get(req.params.code);
   if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -75,6 +98,7 @@ app.get('/api/rooms/:code', (req, res) => {
 
 app.get('/health', (_req, res) => res.type('text').send('ok'));
 
+// ---------- sockets ----------
 io.use(async (socket, next) => {
   try {
     await limiterByIP.consume(socket.handshake.address || 'unknown');
@@ -83,17 +107,6 @@ io.use(async (socket, next) => {
     next(new Error('Rate limit exceeded'));
   }
 });
-
-function publicEntry(entry) {
-  const { voters, ...rest } = entry || {};
-  return rest;
-}
-
-function labelFor(entry) {
-  const song = (entry?.song || '').trim();
-  const artist = (entry?.artist || '').trim();
-  return (artist && song) ? `${artist} — ${song}` : (song || artist || '');
-}
 
 io.on('connection', (socket) => {
   socket.data = { roomCode: null, user: 'Guest', isDJ: false, uid: socket.id };
@@ -122,14 +135,14 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Add request (supports ACK; accepts {code} fallback)
+  // Add request (ACK; accepts {code} fallback; prevents duplicates)
   socket.on('add_request', async (req, cb) => {
     console.log('[add_request]', socket.data.roomCode, 'from', socket.id, req);
     try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
 
     const codeFromPayload = (req?.code && typeof req.code === 'string') ? req.code.toUpperCase() : null;
     const code = socket.data.roomCode || codeFromPayload;
-    if (!code || !rooms.has(code)) { try { cb?.({ ok: false, error: 'Not in a room' }); } catch {} ; return; }
+    if (!code || !rooms.has(code)) { try { cb?.({ ok: false, error: 'Not in a room' }); } catch {}; return; }
 
     if (socket.data.roomCode !== code) {
       socket.join(code);
@@ -137,23 +150,50 @@ io.on('connection', (socket) => {
     }
 
     const room = rooms.get(code);
+
+    // ----- DUP CHECK -----
+    const inSong = (req?.song || '').slice(0, 80);
+    const inArtist = (req?.artist || '').slice(0, 80);
+    const dedupeKey = makeKey(inArtist, inSong);
+
+    let dup = null;
+    for (const id of room.order) {
+      const e = room.requests.get(id);
+      if (!e) continue;
+      if (e.key && e.key === dedupeKey && e.status !== 'done') { dup = e; break; }
+    }
+
+    if (dup) {
+      // treat as an upvote on the existing request
+      if (!dup.voters) dup.voters = new Set();
+      if (!dup.voters.has(socket.data.uid)) {
+        dup.voters.add(socket.data.uid);
+        dup.votes += 1;
+      }
+      io.to(room.code).emit('request_updated', publicEntry(dup));
+      try { cb?.({ ok: true, id: dup.id, merged: true }); } catch {}
+      return;
+    }
+
+    // ----- CREATE NEW -----
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
-      song: (req?.song || '').slice(0, 80),
-      artist: (req?.artist || '').slice(0, 80),
+      song: inSong,
+      artist: inArtist,
       note: (req?.note || '').slice(0, 160),
       user: (req?.user || socket.data.user || 'Guest').slice(0, 24),
       votes: 1,
       status: 'queued',
       createdAt: Date.now(),
-      voters: new Set([socket.data.uid])
+      voters: new Set([socket.data.uid]),
+      key: dedupeKey
     };
     room.requests.set(id, entry);
     room.order.push(id);
 
     io.to(room.code).emit('request_added', publicEntry(entry));
-    try { cb?.({ ok: true, id }); } catch {}
+    try { cb?.({ ok: true, id, merged: false }); } catch {}
   });
 
   // Upvote (one per user per song)
