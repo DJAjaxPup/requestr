@@ -89,6 +89,12 @@ function publicEntry(entry) {
   return rest;
 }
 
+function labelFor(entry) {
+  const song = (entry?.song || '').trim();
+  const artist = (entry?.artist || '').trim();
+  return (artist && song) ? `${artist} — ${song}` : (song || artist || '');
+}
+
 io.on('connection', (socket) => {
   socket.data = { roomCode: null, user: 'Guest', isDJ: false, uid: socket.id };
 
@@ -116,7 +122,7 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Add request (supports ACK; also accepts {code} fallback)
+  // Add request (supports ACK; accepts {code} fallback)
   socket.on('add_request', async (req, cb) => {
     console.log('[add_request]', socket.data.roomCode, 'from', socket.id, req);
     try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
@@ -150,22 +156,26 @@ io.on('connection', (socket) => {
     try { cb?.({ ok: true, id }); } catch {}
   });
 
-  // Upvote
+  // Upvote (one per user per song)
   socket.on('upvote', async ({ id }) => {
     try { await limiterByUser.consume(`${socket.data.user}:${id}`); } catch { return; }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
     const entry = room.requests.get(id);
     if (!entry) return;
+
     const voterKey = socket.data.uid;
-    if (entry.voters?.has(voterKey)) return socket.emit('error_msg', 'You’ve already voted for this song.');
+    if (entry.voters?.has(voterKey)) {
+      socket.emit('error_msg', 'You’ve already voted for this song.');
+      return;
+    }
     if (!entry.voters) entry.voters = new Set();
     entry.voters.add(voterKey);
     entry.votes += 1;
     io.to(room.code).emit('request_updated', publicEntry(entry));
   });
 
-  // DJ-only actions (includes nowPlaying)
+  // DJ actions (auto-link banner to status)
   socket.on('dj_action', ({ action, payload }) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
@@ -175,8 +185,25 @@ io.on('connection', (socket) => {
       const { id, status } = payload || {};
       const entry = room.requests.get(id);
       if (!entry) return;
+
       entry.status = status; // 'queued' | 'playing' | 'done'
       io.to(room.code).emit('request_updated', publicEntry(entry));
+
+      // Auto-update Now Playing
+      if (status === 'playing') {
+        const label = labelFor(entry).slice(0, 120);
+        if (label) {
+          room.nowPlaying = label;
+          io.to(room.code).emit('room_updated', { nowPlaying: room.nowPlaying });
+        }
+      } else if (status === 'done') {
+        // Clear banner if it was this track
+        const label = labelFor(entry);
+        if (room.nowPlaying && label && room.nowPlaying.startsWith(label.slice(0, 40))) {
+          room.nowPlaying = '';
+          io.to(room.code).emit('room_updated', { nowPlaying: '' });
+        }
+      }
     }
 
     if (action === 'reorder') {
@@ -189,12 +216,22 @@ io.on('connection', (socket) => {
 
     if (action === 'delete') {
       const { id } = payload || {};
+      const entry = room.requests.get(id);
       room.requests.delete(id);
       room.order = room.order.filter((x) => x !== id);
       io.to(room.code).emit('request_deleted', { id });
+
+      // Clear banner if we deleted the currently playing track
+      if (entry) {
+        const label = labelFor(entry);
+        if (room.nowPlaying && label && room.nowPlaying.startsWith(label.slice(0, 40))) {
+          room.nowPlaying = '';
+          io.to(room.code).emit('room_updated', { nowPlaying: '' });
+        }
+      }
     }
 
-    // Update room metadata (now supports nowPlaying)
+    // Manual room meta (still supported)
     if (action === 'room_meta') {
       const { name, tipsUrl, nowPlaying } = payload || {};
       if (typeof name === 'string') room.name = name.slice(0, 64);
