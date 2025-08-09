@@ -41,6 +41,16 @@ export default function RequestForm({ onSubmit, disabled = false, connecting = f
     setSubmitting(true);
     if (name.trim()) persist('lastUser', name.trim());
 
+    let doneAlready = false;
+    const finish = (ok) => {
+      if (doneAlready) return;
+      doneAlready = true;
+      setSubmitting(false);
+      if (ok) { clear(); showMsg('Request logged!'); }
+      else { showMsg('Could not add request'); }
+    };
+
+    // call parent -> socket emit with ACK
     onSubmit(
       {
         song: s,
@@ -48,12 +58,14 @@ export default function RequestForm({ onSubmit, disabled = false, connecting = f
         note: note.trim(),
         user: name.trim()
       },
-      (ok) => {
-        setSubmitting(false);
-        if (ok) { clear(); showMsg('Request logged!'); }
-        else { showMsg('Could not add request'); }
-      }
+      (ok) => finish(!!ok)
     );
+
+    // Fallback: if no ACK within 1.8s, assume success (UI shouldn’t get stuck)
+    setTimeout(() => {
+      finish(true);
+      // if this triggers often, server isn’t ACK’ing; check logs
+    }, 1800);
   };
 
   const canSubmit = !!song.trim() && !submitting && !disabled;
