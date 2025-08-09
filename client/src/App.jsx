@@ -59,7 +59,14 @@ export default function App(){
       setConnecting(false);
     };
     const onAdd  = (entry) => setQueue(q => [...q, entry]);
-    const onUpd  = (entry) => setQueue(q => q.map(x => x.id === entry.id ? entry : x));
+   const onUpd  = (entry) => {
+  setQueue(q => {
+    if (entry.status === 'done') {
+      return q.filter(x => x.id !== entry.id);
+    }
+    return q.map(x => x.id === entry.id ? entry : x);
+  });
+};
     const onDel  = ({id}) => setQueue(q => q.filter(x => x.id !== id));
     const onOrd  = (order) => setQueue(q => order.map(id => q.find(x => x.id === id)).filter(Boolean));
     const onRUpd = (meta) => setRoom(r => ({ ...r, ...meta }));
