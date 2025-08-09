@@ -1,118 +1,150 @@
-import { useState, useEffect } from 'react';
-import QRJoin from './components/QRJoin';
-import RequestForm from './components/RequestForm';
-import RequestList from './components/RequestList';
-import DJTools from './components/DJTools';
-import { joinRoom, sendRequest, upvoteRequest, markDone, fetchRequests } from './lib/api';
+// client/src/App.jsx
+import { useEffect, useRef, useState } from 'react';
+import { socket } from './lib/socket';
+import Header from './components/Header.jsx';
+import RequestForm from './components/RequestForm.jsx';
+import RequestList from './components/RequestList.jsx';
+import DJControls from './components/DJControls.jsx';
+import QRJoin from './components/QRJoin.jsx';
+import Toast from './components/Toast.jsx';
 
-export default function App() {
-  const [room, setRoom] = useState('');
-  const [requests, setRequests] = useState([]);
-  const [djMode, setDjMode] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [userVotes, setUserVotes] = useState({}); // Track votes by request ID
+const DEFAULT_ROOM = 'AJAX';
 
-  // Auto-refresh requests every 10 seconds
+export default function App(){
+  const [phase, setPhase] = useState('join');   // 'join' | 'room'
+  const [room, setRoom] = useState(null);       // { code, name, tipsUrl, queue: [...] }
+  const [queue, setQueue] = useState([]);
+  const [msg, setMsg] = useState('');
+  const [connecting, setConnecting] = useState(true);
+
+  const joinInfo = useRef({ code: null, user: '' });
+
+  const showMsg = (m, ms = 1800) => {
+    setMsg(m);
+    if (ms) setTimeout(() => setMsg(''), ms);
+  };
+
+  const doJoin = ({ code, user = '' }) => {
+    if (!code || code.length !== 4) return;
+    const payload = { code: code.toUpperCase(), user: user?.slice(0,24) || '' };
+    joinInfo.current = payload;
+    try {
+      localStorage.setItem('lastRoomCode', payload.code);
+      if (user) localStorage.setItem('lastUser', user);
+    } catch {}
+    socket.emit('join', payload);
+  };
+
+  // Auto-join: ?room=CODE → saved → DEFAULT_ROOM
   useEffect(() => {
-    if (!room) return;
-    const load = async () => {
-      try {
-        const list = await fetchRequests(room);
-        setRequests(list);
-      } catch (err) {
-        console.error('Error fetching requests', err);
-      }
-    };
-    load();
-    const t = setInterval(load, 10000);
-    return () => clearInterval(t);
-  }, [room]);
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('room');
+    const saved = (() => { try { return localStorage.getItem('lastRoomCode'); } catch { return null; } })();
+    const user  = (() => { try { return localStorage.getItem('lastUser') || ''; } catch { return ''; } })();
 
-  const handleJoin = async (roomCode, djCode) => {
-    setConnecting(true);
-    try {
-      const ok = await joinRoom(roomCode, djCode);
-      if (ok) {
-        setRoom(roomCode);
-        setDjMode(!!djCode);
-        setConnected(true);
-      } else {
-        alert('Could not join room');
-      }
-    } finally {
+    const code =
+      (fromQuery && fromQuery.length === 4 && fromQuery.toUpperCase()) ||
+      (saved && saved.length === 4 && saved.toUpperCase()) ||
+      DEFAULT_ROOM;
+
+    doJoin({ code, user });
+  }, []);
+
+  // Socket wiring + resiliency
+  useEffect(() => {
+    const onState = (payload) => {
+      setRoom(payload);
+      setQueue(payload.queue || []);
+      setPhase('room');
       setConnecting(false);
-    }
+    };
+    const onAdd  = (entry) => setQueue(q => [...q, entry]);
+    const onUpd  = (entry) => setQueue(q => q.map(x => x.id === entry.id ? entry : x));
+    const onDel  = ({id}) => setQueue(q => q.filter(x => x.id !== id));
+    const onOrd  = (order) => setQueue(q => order.map(id => q.find(x => x.id === id)).filter(Boolean));
+    const onRUpd = (meta) => setRoom(r => ({ ...r, ...meta }));
+    const onErr  = (m) => showMsg(m);
+
+    socket.on('state', onState);
+    socket.on('request_added', onAdd);
+    socket.on('request_updated', onUpd);
+    socket.on('request_deleted', onDel);
+    socket.on('order_updated', onOrd);
+    socket.on('room_updated', onRUpd);
+    socket.on('error_msg', onErr);
+
+    const onConnect = () => {
+      // rejoin on reconnect
+      if (joinInfo.current?.code) socket.emit('join', joinInfo.current);
+      setConnecting(true);
+    };
+    const onDisconnect = () => setConnecting(true);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    // light periodic resync
+    const t = setInterval(() => {
+      if (joinInfo.current?.code && socket.connected) {
+        socket.emit('join', joinInfo.current);
+      }
+    }, 25000);
+
+    return () => {
+      socket.off('state', onState);
+      socket.off('request_added', onAdd);
+      socket.off('request_updated', onUpd);
+      socket.off('request_deleted', onDel);
+      socket.off('order_updated', onOrd);
+      socket.off('room_updated', onRUpd);
+      socket.off('error_msg', onErr);
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      clearInterval(t);
+    };
+  }, []);
+
+  // Submit handler with server ACK
+  const add = (req, done) => {
+    socket.emit('add_request', req, (resp) => {
+      const ok = !!(resp && resp.ok);
+      done?.(ok);
+      if (!ok) showMsg('Could not add request');
+    });
   };
 
-  const handleRequest = async (req, cb) => {
-    try {
-      const ok = await sendRequest(room, req);
-      if (ok) {
-        const list = await fetchRequests(room);
-        setRequests(list);
-      }
-      cb(ok);
-    } catch (err) {
-      console.error(err);
-      cb(false);
-    }
-  };
+  const join = ({ code, user }) => doJoin({ code, user });
+  const upvote = (id) => socket.emit('upvote', { id });
 
-  const handleUpvote = async (id) => {
-    // Prevent multiple votes for the same song
-    if (userVotes[id]) return;
-    try {
-      const ok = await upvoteRequest(room, id);
-      if (ok) {
-        setUserVotes(prev => ({ ...prev, [id]: true }));
-        const list = await fetchRequests(room);
-        setRequests(list);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  if (phase === 'join') {
+    // If you still use a JoinRoom component, render it here.
+    // We’re auto-joining, so this path is rarely hit.
+    return <div className="container"><QRJoin roomCode={DEFAULT_ROOM} /></div>;
+  }
 
-  const handleMarkDone = async (id) => {
-    try {
-      const ok = await markDone(room, id);
-      if (ok) {
-        const list = await fetchRequests(room);
-        setRequests(list);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  const requestFormDisabled = !socket.connected || !room?.code;
 
   return (
-    <div className="app">
-      {!connected ? (
-        <QRJoin onJoin={handleJoin} connecting={connecting} />
-      ) : (
-        <>
-          {!djMode && (
-            <RequestForm
-              onSubmit={handleRequest}
-              disabled={!connected}
-              connecting={connecting}
-            />
-          )}
-          <RequestList
-            requests={requests}
-            onUpvote={handleUpvote}
-            userVotes={userVotes}
-            djMode={djMode}
+    <div className="container">
+      <Header room={room?.code} tipsUrl={room?.tipsUrl} />
+
+      <div className="row" style={{ alignItems: 'flex-start' }}>
+        <div style={{ flex: 3, display: 'grid', gap: 12 }}>
+          <RequestForm
+            onSubmit={add}
+            disabled={requestFormDisabled}
+            connecting={connecting}
           />
-          {djMode && (
-            <DJTools
-              requests={requests}
-              onMarkDone={handleMarkDone}
-            />
-          )}
-        </>
-      )}
+          <RequestList role="audience" items={queue} onUpvote={upvote} />
+        </div>
+
+        <div style={{ flex: 2, display: 'grid', gap: 12 }}>
+          <DJControls queue={queue} roomMeta={room} />
+          <QRJoin roomCode={room?.code} />
+        </div>
+      </div>
+
+      <Toast msg={msg} />
     </div>
   );
 }
