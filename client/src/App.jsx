@@ -130,14 +130,20 @@ export default function App(){
   }, []);
 
   // Submit handler with server ACK (includes room code fallback)
-  const add = (req, done) => {
-    const code = room?.code;
-    socket.emit('add_request', { ...req, code }, (resp) => {
-      const ok = !!(resp && resp.ok);
-      done?.(ok);
-      if (!ok) showMsg(resp?.error || 'Could not add request');
-    });
-  };
+ const add = (req, done) => {
+  const code = room?.code;
+  socket.emit('add_request', { ...req, code }, (resp) => {
+    const ok = !!(resp && resp.ok);
+    done?.(ok);
+    if (!ok) return showMsg(resp?.error || 'Could not add request');
+    if (resp?.merged) {
+      showMsg('That was already requested — your vote was added!');
+    } else {
+      showMsg('Request logged!');
+    }
+  });
+};
+
 
   const join = ({ code, user }) => doJoin({ code, user });
   const upvote = (id) => socket.emit('upvote', { id });
