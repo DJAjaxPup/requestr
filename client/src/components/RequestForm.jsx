@@ -1,30 +1,15 @@
-import { useState } from 'react';
-
-export default function RequestForm({ onSubmit }) {
-  const [song, setSong] = useState('');
-  const [artist, setArtist] = useState('');
-  const [note, setNote] = useState('');
-  const [name, setName] = useState('');
-  const [msg, setMsg] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const showMsg = (m, ms = 2500) => {
-    setMsg(m);
-    if (ms) setTimeout(() => setMsg(''), ms);
-  };
-
-  const clear = () => {
-    setSong(''); setArtist(''); setNote('');
-  };
-
+-export default function RequestForm({ onSubmit }) {
++export default function RequestForm({ onSubmit, disabled=false, connecting=false }) {
+  ...
   const submit = (e) => {
     e.preventDefault();
++   if (disabled) return;
     const s = song.trim();
     if (!s) return showMsg('Please enter a song.', 2000);
     if (!onSubmit) return;
-
     setSubmitting(true);
-    onSubmit(
+-   onSubmit(
++   onSubmit(
       {
         song: s,
         artist: artist.trim(),
@@ -40,7 +25,8 @@ export default function RequestForm({ onSubmit }) {
   };
 
   return (
-    <form className="card" onSubmit={submit}>
+-   <form className="card" onSubmit={submit}>
++   <form className="card" onSubmit={submit}>
       <h3>Request a Track</h3>
 
       <div style={{ display:'grid', gap:8 }}>
@@ -48,31 +34,47 @@ export default function RequestForm({ onSubmit }) {
           className="input"
           placeholder="Song"
           value={song}
-          onChange={(e) => setSong(e.target.value)}
+-         onChange={(e) => setSong(e.target.value)}
++         onChange={(e) => setSong(e.target.value)}
++         disabled={disabled || submitting}
++         autoFocus
         />
         <input
           className="input"
           placeholder="Artist (optional)"
           value={artist}
-          onChange={(e) => setArtist(e.target.value)}
+-         onChange={(e) => setArtist(e.target.value)}
++         onChange={(e) => setArtist(e.target.value)}
++         disabled={disabled || submitting}
         />
         <input
           className="input"
           placeholder="Note (dedication, shoutout — optional)"
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+-         onChange={(e) => setNote(e.target.value)}
++         onChange={(e) => setNote(e.target.value)}
++         disabled={disabled || submitting}
         />
         <input
           className="input"
           placeholder="Your name (optional)"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+-         onChange={(e) => setName(e.target.value)}
++         onChange={(e) => setName(e.target.value)}
++         disabled={disabled || submitting}
         />
       </div>
 
       <div className="row" style={{ justifyContent:'flex-end', marginTop:10 }}>
-        <button className="button" type="submit" disabled={!song.trim() || submitting}>
-          {submitting ? 'Sending…' : 'Submit'}
+-       <button className="button" type="submit" disabled={!song.trim() || submitting}>
+-         {submitting ? 'Sending…' : 'Submit'}
++       <button
++         className="button"
++         type="submit"
++         disabled={disabled || !song.trim() || submitting}
++         title={disabled ? 'Connecting to room…' : ''}
++       >
++         {disabled ? (connecting ? 'Connecting…' : 'Join a room') : (submitting ? 'Sending…' : 'Submit')}
         </button>
       </div>
 
