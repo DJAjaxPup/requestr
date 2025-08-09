@@ -119,11 +119,12 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Add request
-  socket.on('add_request', async (req) => {
+  // Add request  (NOTE: supports ack callback)
+  socket.on('add_request', async (req, cb) => {
     try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
+
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
@@ -138,7 +139,12 @@ io.on('connection', (socket) => {
     };
     room.requests.set(id, entry);
     room.order.push(id);
+
+    // broadcast
     io.to(room.code).emit('request_added', publicEntry(entry));
+
+    // ack only to the caller (optional)
+    try { cb?.({ ok: true, id }); } catch {}
   });
 
   // Upvote (ONE vote per user per song)
