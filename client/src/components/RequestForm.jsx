@@ -132,17 +132,20 @@ export default function RequestForm({ onSubmit, disabled = false, connecting = f
         </div>
       ) : null}
 
-      <div
-        className="small"
-        style={{
-          marginTop: 10,
-          color: '#9aa3b2',
-          lineHeight: 1.4,
-          fontStyle: 'italic'
-        }}
-      >
-        Ajax will play the request if he can find a mix that matches the style he’s playing.
-      </div>
+    <div
+  style={{
+    marginTop: 12,
+    color: '#fff',
+    background: 'rgba(0,0,0,0.4)',
+    padding: '8px 10px',
+    borderRadius: 4,
+    lineHeight: 1.4,
+    fontWeight: 500
+  }}
+>
+  🎵 Ajax will play the request if he can find a mix that matches the style he’s playing.
+</div>
+
     </form>
   );
 }
