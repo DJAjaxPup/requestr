@@ -1,47 +1,109 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { socket } from '../lib/socket';
 
 export default function DJControls({ queue = [], roomMeta }) {
   const [authed, setAuthed] = useState(false);
   const [pin, setPin] = useState('');
+  const [remember, setRemember] = useState(true); // new: default on
   const [msg, setMsg] = useState('');
 
   // settings fields
   const [name, setName] = useState(roomMeta?.name || '');
   const [tipsUrl, setTipsUrl] = useState(roomMeta?.tipsUrl || '');
 
+  // last successful auth (in-memory)
+  const lastAuth = useRef({ code: null, pin: '' });
+
+  const showMsg = (m, ms = 1800) => {
+    setMsg(m);
+    if (ms) setTimeout(() => setMsg(''), ms);
+  };
+
+  // sync incoming room meta
+  useEffect(() => {
+    if (roomMeta?.name != null) setName(roomMeta.name);
+    if (roomMeta?.tipsUrl != null) setTipsUrl(roomMeta.tipsUrl);
+  }, [roomMeta?.name, roomMeta?.tipsUrl]);
+
+  // bootstrap: try reading saved auth from sessionStorage on mount & when room code changes
+  useEffect(() => {
+    const tryStoredAuth = () => {
+      try {
+        const raw = sessionStorage.getItem('djAuth');
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (!saved?.code || !saved?.pin) return;
+        // if we have a current room, make sure codes match; else just use saved
+        const code = roomMeta?.code || saved.code;
+        lastAuth.current = { code, pin: saved.pin };
+        // fire auth; server will respond with ok/err
+        socket.emit('dj_auth', { code, pin: saved.pin });
+      } catch {}
+    };
+
+    tryStoredAuth();
+  }, [roomMeta?.code]);
+
+  // wire up socket listeners + reconnect re-auth
   useEffect(() => {
     const onOK = ({ room }) => {
       setAuthed(true);
       if (room?.name) setName(room.name);
       if (room?.tipsUrl) setTipsUrl(room.tipsUrl);
-      setMsg('DJ unlocked');
-      setTimeout(() => setMsg(''), 1500);
+      showMsg('DJ unlocked');
+      // persist to sessionStorage if remember is enabled
+      if (remember && lastAuth.current?.code && lastAuth.current?.pin) {
+        try {
+          sessionStorage.setItem(
+            'djAuth',
+            JSON.stringify({ code: lastAuth.current.code, pin: lastAuth.current.pin })
+          );
+        } catch {}
+      }
     };
+
     const onErr = (m) => {
       setAuthed(false);
-      setMsg(typeof m === 'string' ? m : 'Invalid PIN');
-      setTimeout(() => setMsg(''), 2000);
+      showMsg(typeof m === 'string' ? m : 'Invalid PIN');
+      // if stored creds failed, clear them
+      try { sessionStorage.removeItem('djAuth'); } catch {}
     };
+
+    const onConnect = () => {
+      // if we were authed before, re-auth; otherwise try sessionStorage if any
+      const stored = (() => {
+        try { return JSON.parse(sessionStorage.getItem('djAuth') || 'null'); } catch { return null; }
+      })();
+      const authPayload =
+        lastAuth.current?.code && lastAuth.current?.pin
+          ? lastAuth.current
+          : (stored?.code && stored?.pin ? stored : null);
+
+      if (authPayload) {
+        socket.emit('dj_auth', { code: authPayload.code, pin: authPayload.pin });
+      }
+    };
+
     socket.on('dj_auth_ok', onOK);
     socket.on('dj_auth_err', onErr);
+    socket.on('connect', onConnect);
+
     return () => {
       socket.off('dj_auth_ok', onOK);
       socket.off('dj_auth_err', onErr);
+      socket.off('connect', onConnect);
     };
-  }, []);
-
-  useEffect(() => {
-    // keep local fields in sync if server pushes updates
-    if (roomMeta?.name != null) setName(roomMeta.name);
-    if (roomMeta?.tipsUrl != null) setTipsUrl(roomMeta.tipsUrl);
-  }, [roomMeta?.name, roomMeta?.tipsUrl]);
+  }, [remember]);
 
   const auth = () => {
-    if (!roomMeta?.code) return setMsg('Join a room first');
-    socket.emit('dj_auth', { code: roomMeta.code, pin });
+    const code = roomMeta?.code;
+    if (!code) return showMsg('Join a room first');
+    if (!pin) return showMsg('Enter DJ PIN');
+    lastAuth.current = { code, pin };
+    socket.emit('dj_auth', { code, pin });
   };
 
+  // DJ-only actions — server enforces auth
   const setStatus = (id, status) =>
     socket.emit('dj_action', { action: 'set_status', payload: { id, status } });
 
@@ -50,8 +112,7 @@ export default function DJControls({ queue = [], roomMeta }) {
 
   const saveMeta = () => {
     socket.emit('dj_action', { action: 'room_meta', payload: { name, tipsUrl } });
-    setMsg('Saved event settings');
-    setTimeout(() => setMsg(''), 1500);
+    showMsg('Saved event settings');
   };
 
   const top = queue?.[0];
@@ -69,8 +130,18 @@ export default function DJControls({ queue = [], roomMeta }) {
           placeholder="DJ PIN"
           value={pin}
           onChange={(e) => setPin(e.target.value)}
-          inputMode="numeric"
+          inputMode="text"
+          autoComplete="one-time-code"
         />
+        <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            style={{ transform: 'scale(1.1)' }}
+          />
+          Remember this session
+        </label>
         <div className="row" style={{ marginTop: 8 }}>
           <button className="button" onClick={auth}>Unlock</button>
         </div>
