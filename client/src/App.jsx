@@ -8,16 +8,16 @@ import Toast from './components/Toast.jsx';
 import Header from './components/Header.jsx';
 import QRJoin from './components/QRJoin.jsx';
 
+const DEFAULT_ROOM = 'AJAX'; // auto-join fallback
+
 export default function App(){
   const [phase, setPhase] = useState('join');
   const [room, setRoom] = useState(null);
   const [queue, setQueue] = useState([]);
   const [msg, setMsg] = useState('');
 
-  // keep track of the last successful join so we can re-join on reconnect
   const joinInfo = useRef({ code: null, user: '' });
 
-  // ---- helpers ----
   const showMsg = (m, ms = 1800) => {
     setMsg(m);
     if (ms) setTimeout(() => setMsg(''), ms);
@@ -34,31 +34,21 @@ export default function App(){
     socket.emit('join', payload);
   };
 
-  // ---- initial auto-join from ?room= or from localStorage ----
+  // initial join: ?room=CODE → saved → DEFAULT_ROOM
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const fromQuery = params.get('room');
-    const saved = (() => {
-      try { return localStorage.getItem('lastRoomCode'); } catch { return null; }
-    })();
-    const user = (() => {
-      try { return localStorage.getItem('lastUser') || ''; } catch { return ''; }
-    })();
-
-    const code = (fromQuery && fromQuery.length === 4)
-      ? fromQuery.toUpperCase()
-      : (saved && saved.length === 4 ? saved.toUpperCase() : null);
-
-    if (code) doJoin({ code, user });
+    const saved = (() => { try { return localStorage.getItem('lastRoomCode'); } catch { return null; }})();
+    const user = (() => { try { return localStorage.getItem('lastUser') || ''; } catch { return ''; }})();
+    const code =
+      (fromQuery && fromQuery.length === 4 && fromQuery.toUpperCase()) ||
+      (saved && saved.length === 4 && saved.toUpperCase()) ||
+      DEFAULT_ROOM; // <- ensures newcomers are in a room
+    doJoin({ code, user });
   }, []);
 
-  // ---- socket event wiring + resiliency ----
   useEffect(() => {
-    const onState = (payload) => {
-      setRoom(payload);
-      setQueue(payload.queue || []);
-      setPhase('room');
-    };
+    const onState = (payload) => { setRoom(payload); setQueue(payload.queue || []); setPhase('room'); };
     const onAdd  = (entry) => setQueue(q => [...q, entry]);
     const onUpd  = (entry) => setQueue(q => q.map(x => x.id === entry.id ? entry : x));
     const onDel  = ({id}) => setQueue(q => q.filter(x => x.id !== id));
@@ -74,27 +64,14 @@ export default function App(){
     socket.on('room_updated', onRUpd);
     socket.on('error_msg', onErr);
 
-    // auto re-join on reconnect
-    const onConnect = () => {
-      if (joinInfo.current?.code) {
-        socket.emit('join', joinInfo.current);
-      }
-    };
-    const onDisconnect = () => {
-      // just a heads-up; it'll reconnect automatically
-      showMsg('Reconnecting…', 1200);
-    };
+    const onConnect = () => { if (joinInfo.current?.code) socket.emit('join', joinInfo.current); };
+    const onDisconnect = () => showMsg('Reconnecting…', 1200);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
 
-    // background periodic sync (idempotent): re-emit join to fetch fresh state
     const syncTimer = setInterval(() => {
-      if (joinInfo.current?.code && socket.connected) {
-        socket.emit('join', joinInfo.current);
-      }
-    }, 25000); // every 25s
-
-    // when tab becomes visible again, re-sync once
+      if (joinInfo.current?.code && socket.connected) socket.emit('join', joinInfo.current);
+    }, 25000);
     const onVis = () => {
       if (document.visibilityState === 'visible' && joinInfo.current?.code && socket.connected) {
         socket.emit('join', joinInfo.current);
@@ -117,9 +94,19 @@ export default function App(){
     };
   }, []);
 
-  // ---- public API for children ----
+  // onSubmit that waits for server ACK
+  const add = (req, done) => {
+    socket.emit('add_request', req, (resp) => {
+      if (resp && resp.ok) {
+        done?.(true);
+      } else {
+        showMsg('Could not add request');
+        done?.(false);
+      }
+    });
+  };
+
   const join = ({ code, user }) => doJoin({ code, user });
-  const add = (req) => socket.emit('add_request', req);
   const upvote = (id) => socket.emit('upvote', { id });
 
   if (phase === 'join') return <JoinRoom onJoin={join} />;
@@ -127,19 +114,16 @@ export default function App(){
   return (
     <div className="container">
       <Header room={room?.code} tipsUrl={room?.tipsUrl} />
-
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div style={{ flex: 3, display: 'grid', gap: 12 }}>
           <RequestForm onSubmit={add} />
           <RequestList role="audience" items={queue} onUpvote={upvote} />
         </div>
-
         <div style={{ flex: 2, display: 'grid', gap: 12 }}>
           <DJControls queue={queue} roomMeta={room} />
           <QRJoin roomCode={room?.code} />
         </div>
       </div>
-
       <Toast msg={msg} />
     </div>
   );
