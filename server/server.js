@@ -34,8 +34,8 @@ const PORT = process.env.PORT || 4000;
 const rooms = new Map();
 
 // Rate limiting
-const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 }); // 10 ops / 10s per IP
-const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 }); // 5 ops / 10s per user
+const limiterByIP = new RateLimiterMemory({ points: 10, duration: 10 });   // 10 ops / 10s per IP
+const limiterByUser = new RateLimiterMemory({ points: 5, duration: 10 });  // 5 ops / 10s per key
 
 function createRoom({ name = 'New Room', pin, tipsUrl = '', code: codeOverride }) {
   let code = codeOverride
@@ -67,7 +67,8 @@ console.log(`[server] Room ${defaultRoom.name} => code=${defaultRoom.code}, DJ P
 
 // REST helpers
 app.get('/api/rooms/:code', (req, res) => {
-  const room = rooms.get(req.params.code);
+  const normalized = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0,4);
+  const room = rooms.get(normalized);
   if (!room) return res.status(404).json({ error: 'Room not found' });
   res.json({ code: room.code, name: room.name, tipsUrl: room.tipsUrl });
 });
@@ -95,17 +96,22 @@ io.on('connection', (socket) => {
 
   // Audience/DJ join room
   socket.on('join', ({ code, user }) => {
-    const room = rooms.get(code);
-    if (!room) return socket.emit('error_msg', 'Room not found');
-    socket.join(code);
-    socket.data.roomCode = code;
+    const normalized = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    const room = rooms.get(normalized);
+    if (!room) {
+      socket.emit('error_msg', 'Room not found');
+      return;
+    }
+    socket.join(room.code);
+    socket.data.roomCode = room.code;
     if (user) socket.data.user = String(user).slice(0, 24);
     socket.emit('state', serializeRoom(room, false));
   });
 
   // DJ auth (separate PIN)
   socket.on('dj_auth', ({ code, pin }) => {
-    const room = rooms.get(code || socket.data.roomCode);
+    const normalized = String(code || socket.data.roomCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    const room = rooms.get(normalized);
     if (!room) return socket.emit('dj_auth_err', 'Room not found');
     if (String(pin) !== String(room.pin)) return socket.emit('dj_auth_err', 'Invalid PIN');
     socket.data.isDJ = true;
@@ -119,16 +125,38 @@ io.on('connection', (socket) => {
     socket.emit('dj_auth_ok', { room: null });
   });
 
-  // Add request  (NOTE: supports ack callback)
+  // Add request (ALWAYS ACK)
   socket.on('add_request', async (req, cb) => {
-    try { await limiterByUser.consume(socket.data.user || socket.id); } catch { return; }
-    const room = rooms.get(socket.data.roomCode);
-    if (!room) return;
+    const ack = (payload) => { try { cb?.(payload); } catch {} };
+
+    // Per-socket rate limit to avoid “Guest” collisions
+    try {
+      await limiterByUser.consume(`${socket.id}:add_request`);
+    } catch {
+      return ack({ ok: false, error: 'Too many requests — slow down a little.' });
+    }
+
+    // Accept explicit room from payload, else use joined room
+    const roomCode = String(req?.room || socket.data.roomCode || '')
+      .toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+
+    const room = rooms.get(roomCode);
+    if (!room) {
+      return ack({ ok: false, error: 'Not in a room — please join again.' });
+    }
+
+    // Make sure this socket is actually in that room
+    if (!socket.rooms.has(room.code)) {
+      return ack({ ok: false, error: 'Join failed — reconnect and try again.' });
+    }
+
+    const song = String(req?.song || '').trim();
+    if (!song) return ack({ ok: false, error: 'Song is required.' });
 
     const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const entry = {
       id,
-      song: (req?.song || '').slice(0, 80),
+      song: song.slice(0, 80),
       artist: (req?.artist || '').slice(0, 80),
       note: (req?.note || '').slice(0, 160),
       user: (req?.user || socket.data.user || 'Guest').slice(0, 24),
@@ -137,25 +165,30 @@ io.on('connection', (socket) => {
       createdAt: Date.now(),
       voters: new Set([socket.data.uid]) // first vote belongs to requester
     };
+
     room.requests.set(id, entry);
     room.order.push(id);
 
-    // broadcast
+    // broadcast to room
     io.to(room.code).emit('request_added', publicEntry(entry));
 
-    // ack only to the caller (optional)
-    try { cb?.({ ok: true, id }); } catch {}
+    // ACK to caller
+    return ack({ ok: true, id });
   });
 
   // Upvote (ONE vote per user per song)
   socket.on('upvote', async ({ id }) => {
-    try { await limiterByUser.consume(`${socket.data.user}:${id}`); } catch { return; }
+    try {
+      await limiterByUser.consume(`${socket.data.uid}:upvote:${id}`);
+    } catch {
+      return; // soft-drop upvote spam
+    }
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
     const entry = room.requests.get(id);
     if (!entry) return;
 
-    const voterKey = socket.data.uid; // could be replaced by a persistent user ID later
+    const voterKey = socket.data.uid; // replace with persistent ID later if desired
     if (entry.voters?.has(voterKey)) {
       socket.emit('error_msg', 'You’ve already voted for this song.');
       return;
