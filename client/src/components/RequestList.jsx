@@ -22,11 +22,10 @@ export default function RequestList({ role = 'audience', items = [], onUpvote })
     onUpvote?.(id);
   };
 
-  // Show a chip only for queued/playing. Hide for "new" (fresh requests) and "done" (you already remove them).
   const chip = (status) => {
     if (status === 'playing') return <span className="status-chip">Playing</span>;
-    if (status === 'queued')  return <span className="status-chip">Queued</span>;
-    return null; // new/done → no chip
+    if (status === 'queued') return <span className="status-chip">Queued</span>;
+    return null;
   };
 
   return (
@@ -34,12 +33,12 @@ export default function RequestList({ role = 'audience', items = [], onUpvote })
       <h3>Requests</h3>
       <div className="list">
         {list.map(item => {
-          const status = item.status || 'new'; // default to "new" visually
+          const status = item.status || 'new';
           const rowClass =
             status === 'playing' ? 'status-playing' :
             status === 'queued'  ? 'status-queued'  :
             status === 'done'    ? 'status-done'    :
-            ''; // no status class for "new"
+            '';
 
           return (
             <div key={item.id} className={`item ${rowClass}`}>
@@ -53,7 +52,7 @@ export default function RequestList({ role = 'audience', items = [], onUpvote })
                 </div>
               </div>
 
-              <div className="vote-wrap">
+              <div className="vote-wrap" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span className="votes">{item.votes ?? 0}</span>
                 <button
                   className="upvote"
@@ -61,8 +60,9 @@ export default function RequestList({ role = 'audience', items = [], onUpvote })
                   disabled={voted.has(item.id)}
                   aria-label="Upvote"
                   title={voted.has(item.id) ? 'You already voted' : 'Upvote'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                 >
-                  ▲
+                  ▲ <span style={{ fontSize: '0.85em' }}>Upvote</span>
                 </button>
               </div>
             </div>
@@ -73,4 +73,3 @@ export default function RequestList({ role = 'audience', items = [], onUpvote })
     </div>
   );
 }
-
