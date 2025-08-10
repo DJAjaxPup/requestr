@@ -53,11 +53,15 @@ body{
 
 /* Avatar */
 .avatar{
-  width:64px; height:64px; border-radius:12px;
-  object-fit: cover; object-position: center;
+  width:32px;
+  height:32px;
+  border-radius:8px;
+  object-fit: cover;
+  object-position: center;
   border: 2px solid rgba(255,46,147,.5);
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
+
 
 /* Buttons / Inputs */
 .button{
