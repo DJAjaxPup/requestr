@@ -18,13 +18,13 @@ export default function Header({ room, tipsUrl, nowPlaying }) {
   alt="DJ Ajax"
   style={{
     width: '100%',
-    maxWidth: '280px',   // keeps it from exploding on large screens
+    maxWidth: '140px',   // was 280px
     borderRadius: '12px',
     boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
     objectFit: 'cover'
   }}
 />
-        {tipsUrl ? (
+     {tipsUrl ? (
           <a className="button" href={tipsUrl} target="_blank" rel="noreferrer">
             Tip Jar
           </a>
