@@ -184,7 +184,7 @@ io.on('connection', (socket) => {
       note: (req?.note || '').slice(0, 160),
       user: (req?.user || socket.data.user || 'Guest').slice(0, 24),
       votes: 1,
-      status: 'queued',
+      status: 'new',
       createdAt: Date.now(),
       voters: new Set([socket.data.uid]),
       key: dedupeKey
