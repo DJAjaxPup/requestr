@@ -13,12 +13,17 @@ export default function Header({ room, tipsUrl, nowPlaying }) {
 
       <div style={{ display:'flex', alignItems:'center', gap:12 }}>
         {/* Your avatar */}
-        <img
-          src="/ajax.jpg"
-          alt="DJ Ajax"
-          className="avatar"
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-        />
+<img
+  src="/ajax.jpg?v=2"
+  alt="DJ Ajax"
+  style={{
+    width: '100%',
+    maxWidth: '280px',   // keeps it from exploding on large screens
+    borderRadius: '12px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+    objectFit: 'cover'
+  }}
+/>
         {tipsUrl ? (
           <a className="button" href={tipsUrl} target="_blank" rel="noreferrer">
             Tip Jar
